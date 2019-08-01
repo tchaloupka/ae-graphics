@@ -14,7 +14,6 @@ module ae.utils.graphics;
 
 public import ae.utils.graphics.color,
               ae.utils.graphics.draw,
-              ae.utils.graphics.ffmpeg,
               ae.utils.graphics.gamma,
               ae.utils.graphics.hls,
               ae.utils.graphics.image,

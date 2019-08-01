@@ -58,19 +58,28 @@ struct Color(FieldTuple...)
 	{
 		typeof(this) r;
 		foreach (i, f; r.tupleof)
-			r.tupleof[i] = value;
+			static if (__traits(identifier, r.tupleof[i]) == "a")
+				r.tupleof[i] = typeof(r.tupleof[i]).max;
+			else
+				r.tupleof[i] = value;
 		return r;
 	}
 
+	static if (is(ChannelType:uint))
+	{
+		enum typeof(this) black = monochrome(0);
+		enum typeof(this) white = monochrome(ChannelType.max);
+	}
+
 	/// Interpolate between two colors.
+	/// See also: Gradient
 	static typeof(this) itpl(P)(typeof(this) c0, typeof(this) c1, P p, P p0, P p1)
 	{
-		alias ExpandNumericType!(ChannelType, P.sizeof*8) U;
-		alias Signed!U S;
+		alias TryExpandNumericType!(ChannelType, P.sizeof*8) U;
 		typeof(this) r;
 		foreach (i, f; r.tupleof)
 			static if (r.tupleof[i].stringof != "r.x") // skip padding
-				r.tupleof[i] = cast(ChannelType).itpl(cast(U)c0.tupleof[i], cast(U)c1.tupleof[i], cast(S)p, cast(S)p0, cast(S)p1);
+				r.tupleof[i] = cast(ChannelType).itpl(cast(U)c0.tupleof[i], cast(U)c1.tupleof[i], p, p0, p1);
 		return r;
 	}
 
@@ -79,7 +88,7 @@ struct Color(FieldTuple...)
 		if (is(typeof(a)))
 	{
 		alias A = typeof(c0.a);
-		A a = ~cast(A)(~c0.a * ~c1.a / A.max);
+		A a = flipBits(cast(A)(c0.a.flipBits * c1.a.flipBits / A.max));
 		if (!a)
 			return typeof(this).init;
 		A x = cast(A)(c1.a * A.max / a);
@@ -101,6 +110,34 @@ struct Color(FieldTuple...)
 		return r;
 	}
 
+	/// Alpha-blend a color with an alpha channel on top of one without.
+	static typeof(this) blend(C)(typeof(this) c0, C c1)
+		if (!is(typeof(a)) && is(typeof(c1.a)))
+	{
+		alias A = typeof(c1.a);
+		if (!c1.a)
+			return c0;
+		//A x = cast(A)(c1.a * A.max / a);
+
+		typeof(this) r;
+		foreach (i, ref f; r.tupleof)
+		{
+			enum name = __traits(identifier, r.tupleof[i]);
+			static if (name == "x")
+				{} // skip padding
+			else
+			static if (name == "a")
+				static assert(false);
+			else
+			{
+				auto v0 = __traits(getMember, c0, name);
+				auto v1 = __traits(getMember, c1, name);
+				f = .blend(v1, v0, c1.a);
+			}
+		}
+		return r;
+	}
+
 	/// Construct an RGB color from a typical hex string.
 	static if (is(typeof(this.r) == ubyte) && is(typeof(this.g) == ubyte) && is(typeof(this.b) == ubyte))
 	{
@@ -109,11 +146,18 @@ struct Color(FieldTuple...)
 			import std.conv;
 			import std.exception;
 
-			enforce(s.length == 6, "Invalid color string");
+			enforce(s.length == 6 || (is(typeof(this.a) == ubyte) && s.length == 8), "Invalid color string");
 			typeof(this) c;
 			c.r = s[0..2].to!ubyte(16);
 			c.g = s[2..4].to!ubyte(16);
 			c.b = s[4..6].to!ubyte(16);
+			static if (is(typeof(this.a) == ubyte))
+			{
+				if (s.length == 8)
+					c.a = s[6..8].to!ubyte(16);
+				else
+					c.a = ubyte.max;
+			}
 			return c;
 		}
 
@@ -131,7 +175,7 @@ struct Color(FieldTuple...)
 		typeof(this) r;
 		foreach (i, f; r.tupleof)
 			static if(r.tupleof[i].stringof != "r.x") // skip padding
-				r.tupleof[i] = cast(typeof(r.tupleof[i])) mixin(op ~ `this.tupleof[i]`);
+				r.tupleof[i] = cast(typeof(r.tupleof[i])) unary!(op[0])(this.tupleof[i]);
 		return r;
 	}
 
@@ -192,13 +236,18 @@ struct Color(FieldTuple...)
 		return r;
 	}
 
-	T opCast(T)()
-		if (is(T==struct) && structFields!T == structFields!Fields)
+	T opCast(T)() const
+	if (is(T==struct) && structFields!T == structFields!Fields)
 	{
-		T t;
-		foreach (i, f; this.tupleof)
-			t.tupleof[i] = cast(typeof(t.tupleof[i])) this.tupleof[i];
-		return t;
+		static if (is(T == typeof(this)))
+			return this;
+		else
+		{
+			T t;
+			foreach (i, f; this.tupleof)
+				t.tupleof[i] = cast(typeof(t.tupleof[i])) this.tupleof[i];
+			return t;
+		}
 	}
 
 	/// Sum of all channels
@@ -208,6 +257,27 @@ struct Color(FieldTuple...)
 		foreach (i, f; this.tupleof)
 			static if (this.tupleof[i].stringof != "this.x") // skip padding
 				result += this.tupleof[i];
+		return result;
+	}
+
+	static @property Color min()
+	{
+		Color result;
+		foreach (ref v; result.tupleof)
+			static if (is(typeof(typeof(v).min)))
+				v = typeof(v).min;
+			else
+			static if (is(typeof(typeof(v).max)))
+				v = -typeof(v).max;
+		return result;
+	}
+
+	static @property Color max()
+	{
+		Color result;
+		foreach (ref v; result.tupleof)
+			static if (is(typeof(typeof(v).max)))
+				v = typeof(v).max;
 		return result;
 	}
 }
@@ -244,6 +314,9 @@ unittest
 	RGB hex = RGB.fromHex("123456");
 	assert(hex.r == 0x12 && hex.g == 0x34 && hex.b == 0x56);
 
+	BGRA hex2 = BGRA.fromHex("12345678");
+	assert(hex2.r == 0x12 && hex2.g == 0x34 && hex2.b == 0x56 && hex2.a == 0x78);
+
 	assert(RGB(1, 2, 3) + RGB(4, 5, 6) == RGB(5, 7, 9));
 
 	RGB c = RGB(1, 1, 1);
@@ -252,6 +325,9 @@ unittest
 	c += c;
 	assert(c == RGB(4, 4, 4));
 }
+
+static assert(RGB.min == RGB(  0,   0,   0));
+static assert(RGB.max == RGB(255, 255, 255));
 
 unittest
 {
@@ -284,7 +360,32 @@ unittest
 
 unittest
 {
+	import std.conv;
+
+	L8 r;
+
+	r = L8.blend(L8(123),
+	             LA(231, 0));
+	assert(r ==  L8(123), text(r));
+
+	r = L8.blend(L8(123),
+	             LA(231, 255));
+	assert(r ==  L8(231), text(r));
+
+	r = L8.blend(L8(  0),
+	             LA(255, 100));
+	assert(r ==  L8(100), text(r));
+}
+
+unittest
+{
 	Color!(real, "r", "g", "b") c;
+}
+
+unittest
+{
+	const RGB c;
+	RGB x = cast(RGB)c;
 }
 
 /// Obtains the type of each channel for homogenous colors.
@@ -342,5 +443,67 @@ unittest
 
 // ***************************************************************************
 
+/// Calculate an interpolated color on a gradient with multiple points
+struct Gradient(Value, Color)
+{
+	struct Point
+	{
+		Value value;
+		Color color;
+	}
+	Point[] points;
+
+	Color get(Value value) const
+	{
+		assert(points.length, "Gradient must have at least one point");
+
+		if (value <= points[0].value)
+			return points[0].color;
+
+		for (int i = 0; i < points.length - 1; i++)
+		{
+			assert(points[i].value <= points[i+1].value,
+				"Gradient values are not in ascending order");
+			if (value < points[i+1].value)
+				return Color.itpl(points[i].color, points[i+1].color, value, points[i].value, points[i+1].value);
+		}
+
+		return points[$-1].color;
+	}
+}
+
+unittest
+{
+	Gradient!(int, L8) grad;
+	grad.points = [
+		grad.Point(0, L8(0)),
+		grad.Point(10, L8(100)),
+	];
+
+	assert(grad.get(-5) == L8(  0));
+	assert(grad.get( 0) == L8(  0));
+	assert(grad.get( 5) == L8( 50));
+	assert(grad.get(10) == L8(100));
+	assert(grad.get(15) == L8(100));
+}
+
+unittest
+{
+	Gradient!(float, L8) grad;
+	grad.points = [
+		grad.Point(0.0f, L8( 0)),
+		grad.Point(0.5f, L8(10)),
+		grad.Point(1.0f, L8(30)),
+	];
+
+	assert(grad.get(0.00f) == L8(  0));
+	assert(grad.get(0.25f) == L8(  5));
+	assert(grad.get(0.50f) == L8( 10));
+	assert(grad.get(0.75f) == L8( 20));
+	assert(grad.get(1.00f) == L8( 30));
+}
+
+// ***************************************************************************
+
 // TODO: deprecate
-T blend(T)(T f, T b, T a) if (is(typeof(f*a+~b))) { return cast(T) ( ((f*a) + (b*~a)) / T.max ); }
+T blend(T)(T f, T b, T a) if (is(typeof(f*a+flipBits(b)))) { return cast(T) ( ((f*a) + (b*flipBits(a))) / T.max ); }

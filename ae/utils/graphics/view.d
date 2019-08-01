@@ -44,12 +44,19 @@ enum isDirectView(T) =
 /// existing direct view primitives.
 mixin template DirectView()
 {
-	alias COLOR = typeof(scanline(0)[0]);
+	import std.traits : Unqual;
+	alias COLOR = Unqual!(typeof(scanline(0)[0]));
 
 	/// Implements the view[x, y] operator.
-	ref COLOR opIndex(int x, int y)
+	ref inout(COLOR) opIndex(int x, int y) inout
 	{
 		return scanline(y)[x];
+	}
+
+	/// Allows array-like view[y][x] access.
+	auto opIndex(int y)
+	{
+		return scanline(y);
 	}
 
 	/// Implements the view[x, y] = c operator.
@@ -129,12 +136,39 @@ void blitTo(SRC, DST)(auto ref SRC src, auto ref DST dst, int x, int y)
 	src.blitTo(dst.crop(x, y, x+src.w, y+src.h));
 }
 
+void safeBlitTo(SRC, DST)(auto ref SRC src, auto ref DST dst, int x, int y)
+{
+	// TODO: refactor into safeCrop
+	int sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1;
+	sx1 = src.w;
+	sy1 = src.h;
+	dx0 = x;
+	dy0 = y;
+	dx1 = x + src.w;
+	dy1 = y + src.h;
+	if (dx0 < 0) { auto v = -dx0; sx0 += v; dx0 += v; }
+	if (dy0 < 0) { auto v = -dy0; sy0 += v; dy0 += v; }
+	if (dx1 > dst.w) { auto v = dx1 - dst.w; sx1 -= v; dx1 -= v; }
+	if (dy1 > dst.h) { auto v = dy1 - dst.h; sy1 -= v; dy1 -= v; }
+	if (dx0 > dx1) { dx1 = dx0; sx1 = sx0; }
+	if (dy0 > dy1) { dy1 = dy0; sy1 = sy0; }
+	assert(sx1 - sx0 == dx1 - dx0);
+	assert(sy1 - sy0 == dy1 - dy0);
+	blitTo(
+		src.crop(sx0, sy0, sx1, sy1),
+		dst.crop(dx0, dy0, dx1, dy1),
+	);
+}
+
 /// Default implementation for the .size method.
 /// Asserts that the view has the desired size.
 void size(V)(auto ref V src, int w, int h)
 	if (isView!V)
 {
-	assert(src.w == w && src.h == h, "Wrong size for " ~ V.stringof);
+	import std.string : format;
+	assert(src.w == w && src.h == h,
+		"Wrong size for %s: need (%s,%s), have (%s,%s)"
+		.format(V.stringof, w, h, src.w, src.h));
 }
 
 // ***************************************************************************
@@ -231,7 +265,6 @@ unittest
 }
 
 /// Present a resized view using nearest-neighbor interpolation.
-/// Use big=true for images over 32k width/height.
 auto nearestNeighbor(V)(auto ref V src, int w, int h)
 	if (isView!V)
 {
@@ -672,9 +705,41 @@ template colorMap(alias fun)
 	}
 }
 
+/// Two-way colorMap which allows writing to the returned view.
+template colorMap(alias getFun, alias setFun)
+{
+	auto colorMap(V)(auto ref V src)
+		if (isView!V)
+	{
+		alias OLDCOLOR = ViewColor!V;
+		alias NEWCOLOR = typeof(getFun(OLDCOLOR.init));
+
+		struct Map
+		{
+			V src;
+
+			@property int w() { return src.w; }
+			@property int h() { return src.h; }
+
+			NEWCOLOR opIndex(int x, int y)
+			{
+				return getFun(src[x, y]);
+			}
+
+			static if (isWritableView!V)
+			NEWCOLOR opIndexAssign(NEWCOLOR c, int x, int y)
+			{
+				return src[x, y] = setFun(c);
+			}
+		}
+
+		return Map(src);
+	}
+}
+
 /// Returns a view which inverts all channels.
 // TODO: skip alpha and padding
-alias invert = colorMap!(c => ~c);
+alias invert = colorMap!(c => ~c, c => ~c);
 
 unittest
 {
@@ -691,7 +756,6 @@ unittest
 /// pixels that satisfy the given predicate.
 template trim(alias fun)
 {
-
 	auto trim(V)(auto ref V src)
 	{
 		int x0 = 0, y0 = 0, x1 = src.w, y1 = src.h;
@@ -751,7 +815,7 @@ template parallel(alias fun)
 		auto processSegment(R)(R rows)
 		{
 			auto y0 = rows[0];
-			auto y1 = y0 + rows.length;
+			auto y1 = y0 + cast(typeof(y0))rows.length;
 			auto segment = src.crop(0, y0, src.w, y1);
 			return fun(segment);
 		}

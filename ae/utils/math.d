@@ -13,11 +13,6 @@
 
 module ae.utils.math;
 
-public import std.algorithm : min, max, swap;
-public import std.math;
-import std.traits : Signed, Unsigned;
-import core.bitop : bswap;
-
 typeof(Ta+Tb+Tc) bound(Ta, Tb, Tc)(Ta a, Tb b, Tc c) { return a<b?b:a>c?c:a; }
 bool between(T)(T point, T a, T b) { return a <= point && point <= b; } /// Assumes points are sorted (was there a faster way?)
 auto sqr(T)(T x) { return x*x; }
@@ -26,6 +21,7 @@ void sort2(T)(ref T x, ref T y) { if (x > y) { T z=x; x=y; y=z; } }
 
 T itpl(T, U)(T low, T high, U r, U rLow, U rHigh)
 {
+	import std.traits : Signed;
 	return cast(T)(low + (cast(Signed!T)high-cast(Signed!T)low) * (cast(Signed!U)r - cast(Signed!U)rLow) / (cast(Signed!U)rHigh - cast(Signed!U)rLow));
 }
 
@@ -47,8 +43,49 @@ auto op(string OP, T...)(T args)
 auto sum(T...)(T args) { return op!"+"(args); }
 auto average(T...)(T args) { return sum(args) / args.length; }
 
+T rangeIntersection(T)(T a0, T a1, T b0, T b1)
+{
+	import std.algorithm.comparison : min, max;
+
+	auto x0 = max(a0, b0);
+	auto x1 = min(a1, b1);
+	return x0 < x1 ? x1 - x0 : 0;
+}
+
+unittest
+{
+	assert(rangeIntersection(0, 2, 1, 3) == 1);
+	assert(rangeIntersection(0, 1, 2, 3) == 0);
+}
+
+template unary(char op)
+{
+	T unary(T)(T value)
+	{
+		// Silence DMD 2.078.0 warning about integer promotion rules
+		// https://dlang.org/changelog/2.078.0.html#fix16997
+		static if ((op == '-' || op == '+' || op == '~') && is(T : int))
+			alias CastT = int;
+		else
+			alias CastT = T;
+		return mixin(`cast(T)` ~ op ~ `cast(CastT)value`);
+	}
+}
+
+/// Like the ~ operator, but without int-promotion.
+alias flipBits = unary!'~';
+
+unittest
+{
+	ubyte b = 0x80;
+	auto b2 = b.flipBits;
+	assert(b2 == 0x7F);
+	static assert(is(typeof(b2) == ubyte));
+}
+
 T swapBytes(T)(T b)
 {
+	import core.bitop : bswap;
 	static if (b.sizeof == 1)
 		return b;
 	else
@@ -107,3 +144,28 @@ unittest
 	assert(bitsFor( int.max) == 31);
 	assert(bitsFor(uint.max) == 32);
 }
+
+/// Get the smallest built-in unsigned integer type
+/// that can store this many bits of data.
+template TypeForBits(uint bits)
+{
+	static if (bits <= 8)
+		alias TypeForBits = ubyte;
+	else
+	static if (bits <= 16)
+		alias TypeForBits = ushort;
+	else
+	static if (bits <= 32)
+		alias TypeForBits = uint;
+	else
+	static if (bits <= 64)
+		alias TypeForBits = ulong;
+	else
+		static assert(false, "No integer type big enough for " ~ bits.stringof ~ " bits");
+}
+
+static assert(is(TypeForBits!7 == ubyte));
+static assert(is(TypeForBits!8 == ubyte));
+static assert(is(TypeForBits!9 == ushort));
+static assert(is(TypeForBits!64 == ulong));
+static assert(!is(TypeForBits!65));

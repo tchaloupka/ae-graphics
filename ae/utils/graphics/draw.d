@@ -151,10 +151,15 @@ void hline(bool CHECKED=true, V, COLOR)(auto ref V v, int x1, int x2, int y, COL
 	if (isWritableView!V && is(COLOR : ViewColor!V))
 {
 	mixin(CheckHLine);
-	v.scanline(y)[x1..x2] = c;
+	static if (isDirectView!V)
+		v.scanline(y)[x1..x2] = c;
+	else
+		foreach (x; x1..x2)
+			v[x, y] = c;
 }
 
 void vline(bool CHECKED=true, V, COLOR)(auto ref V v, int x, int y1, int y2, COLOR c)
+	if (isWritableView!V && is(COLOR : ViewColor!V))
 {
 	mixin(CheckVLine);
 	foreach (y; y1..y2) // TODO: optimize
@@ -165,6 +170,7 @@ void line(bool CHECKED=true, V, COLOR)(auto ref V v, int x1, int y1, int x2, int
 	if (isWritableView!V && is(COLOR : ViewColor!V))
 {
 	mixin FixMath;
+	import std.algorithm.mutation : swap;
 
 	enum DrawLine = q{
 		// Axis-independent part. Mixin context:
@@ -192,6 +198,8 @@ void line(bool CHECKED=true, V, COLOR)(auto ref V v, int x1, int y1, int x2, int
 			mixin(DrawPixel);
 		}
 	};
+
+	import std.math : abs;
 
 	if (abs(x2-x1) > abs(y2-y1))
 	{
@@ -240,7 +248,7 @@ void fillRect(bool CHECKED=true, V, COLOR)(auto ref V v, int x1, int y1, int x2,
 		if (y2 >= v.h) y2 = v.h;
 	}
 	foreach (y; y1..y2)
-		v.scanline(y)[x1..x2] = b;
+		v.hline!false(x1, x2, y, b);
 }
 
 void fillRect(bool CHECKED=true, V, COLOR)(auto ref V v, int x1, int y1, int x2, int y2, COLOR c, COLOR b) // [)
@@ -279,6 +287,8 @@ private void floodFillPtr(V, COLOR)(auto ref V v, COLOR* pp, COLOR c, COLOR f)
 void fillCircle(V, COLOR)(auto ref V v, int x, int y, int r, COLOR c)
 	if (isWritableView!V && is(COLOR : ViewColor!V))
 {
+	import std.algorithm.comparison : min;
+
 	int x0 = x>r?x-r:0;
 	int y0 = y>r?y-r:0;
 	int x1 = min(x+r, v.w-1);
@@ -294,6 +304,9 @@ void fillCircle(V, COLOR)(auto ref V v, int x, int y, int r, COLOR c)
 void fillSector(V, COLOR)(auto ref V v, int x, int y, int r0, int r1, real a0, real a1, COLOR c)
 	if (isWritableView!V && is(COLOR : ViewColor!V))
 {
+	import std.algorithm.comparison : min;
+	import std.math : atan2;
+
 	int x0 = x>r1?x-r1:0;
 	int y0 = y>r1?y-r1:0;
 	int x1 = min(x+r1, v.w-1);
@@ -311,9 +324,8 @@ void fillSector(V, COLOR)(auto ref V v, int x, int y, int r0, int r1, real a0, r
 			if (r0s <= rs && rs < r1s)
 			{
 				real a = atan2(cast(real)dy, cast(real)dx);
-				if ((a0 <= a && a <= a1) ||
-				    (a += TAU,
-				    (a0 <= a && a <= a1)))
+				if ((a0 <= a     && a     <= a1) ||
+				    (a0 <= a+TAU && a+TAU <= a1))
 					v[px, py] = c;
 			}
 		}
@@ -324,6 +336,8 @@ struct Coord { int x, y; string toString() { import std.string; return format("%
 void fillPoly(V, COLOR)(auto ref V v, Coord[] coords, COLOR f)
 	if (isWritableView!V && is(COLOR : ViewColor!V))
 {
+	import std.algorithm.comparison : min, max;
+
 	int minY, maxY;
 	minY = maxY = coords[0].y;
 	foreach (c; coords[1..$])
@@ -398,6 +412,8 @@ void thickLinePoly(V, COLOR)(auto ref V v, Coord[] coords, int r, COLOR c)
 
 mixin template FixMath(ubyte coordinateBitsParam = 16)
 {
+	import ae.utils.meta : SignedBitsType, UnsignedBitsType;
+
 	enum coordinateBits = coordinateBitsParam;
 
 	static assert(COLOR.homogenous, "Asymmetric color types not supported, fix me!");
@@ -512,9 +528,9 @@ private template softRoundShape(bool RING)
 					{
 						frac alpha;
 						if (frs<fr1s)
-							alpha =  alphafunc(cast(frac)fixdiv(frs-fr0s, fr10));
+							alpha = alphafunc(cast(frac)fixdiv(frs-fr0s, fr10));
 						else
-							alpha = ~alphafunc(cast(frac)fixdiv(frs-fr1s, fr21));
+							alpha = alphafunc(cast(frac)fixdiv(frs-fr1s, fr21)).flipBits;
 						row[cx] = COLOR.op!q{.blend(a, b, c)}(color, row[cx], alpha);
 					}
 				}
@@ -525,7 +541,7 @@ private template softRoundShape(bool RING)
 					else
 					if (frs<fr2s)
 					{
-						frac alpha = ~alphafunc(cast(frac)fixdiv(frs-fr1s, fr21));
+						frac alpha = alphafunc(cast(frac)fixdiv(frs-fr1s, fr21)).flipBits;
 						row[cx] = COLOR.op!q{.blend(a, b, c)}(color, row[cx], alpha);
 					}
 				}
@@ -571,16 +587,16 @@ template aaPutPixel(bool CHECKED=true, bool USE_ALPHA=true)
 		static if (CHECKED)
 			if (ix>=0 && iy>=0 && ix+1<v.w && iy+1<v.h)
 			{
-				plot!false(ix  , iy  , fracmul(~fixfpart(fx), ~fixfpart(fy)));
-				plot!false(ix  , iy+1, fracmul(~fixfpart(fx),  fixfpart(fy)));
-				plot!false(ix+1, iy  , fracmul( fixfpart(fx), ~fixfpart(fy)));
-				plot!false(ix+1, iy+1, fracmul( fixfpart(fx),  fixfpart(fy)));
+				plot!false(ix  , iy  , fracmul(fixfpart(fx).flipBits, fixfpart(fy).flipBits));
+				plot!false(ix  , iy+1, fracmul(fixfpart(fx).flipBits, fixfpart(fy)         ));
+				plot!false(ix+1, iy  , fracmul(fixfpart(fx)         , fixfpart(fy).flipBits));
+				plot!false(ix+1, iy+1, fracmul(fixfpart(fx)         , fixfpart(fy)         ));
 				return;
 			}
-		plot!CHECKED(ix  , iy  , fracmul(~fixfpart(fx), ~fixfpart(fy)));
-		plot!CHECKED(ix  , iy+1, fracmul(~fixfpart(fx),  fixfpart(fy)));
-		plot!CHECKED(ix+1, iy  , fracmul( fixfpart(fx), ~fixfpart(fy)));
-		plot!CHECKED(ix+1, iy+1, fracmul( fixfpart(fx),  fixfpart(fy)));
+		plot!CHECKED(ix  , iy  , fracmul(fixfpart(fx).flipBits, fixfpart(fy).flipBits));
+		plot!CHECKED(ix  , iy+1, fracmul(fixfpart(fx).flipBits, fixfpart(fy)         ));
+		plot!CHECKED(ix+1, iy  , fracmul(fixfpart(fx)         , fixfpart(fy).flipBits));
+		plot!CHECKED(ix+1, iy+1, fracmul(fixfpart(fx)         , fixfpart(fy)         ));
 	}
 }
 
@@ -638,14 +654,14 @@ void aaFillRect(bool CHECKED=true, F:float, V, COLOR)(auto ref V v, F x1, F y1, 
 	fix x2f = tofix(x2); int x2i = fixto!int(x2f);
 	fix y2f = tofix(y2); int y2i = fixto!int(y2f);
 
-	v.vline!CHECKED(x1i, y1i+1, y2i, color, ~fixfpart(x1f));
-	v.vline!CHECKED(x2i, y1i+1, y2i, color,  fixfpart(x2f));
-	v.hline!CHECKED(x1i+1, x2i, y1i, color, ~fixfpart(y1f));
-	v.hline!CHECKED(x1i+1, x2i, y2i, color,  fixfpart(y2f));
-	v.aaPutPixel!CHECKED(x1i, y1i, color, fracmul(~fixfpart(x1f), ~fixfpart(y1f)));
-	v.aaPutPixel!CHECKED(x1i, y2i, color, fracmul(~fixfpart(x1f),  fixfpart(y2f)));
-	v.aaPutPixel!CHECKED(x2i, y1i, color, fracmul( fixfpart(x2f), ~fixfpart(y1f)));
-	v.aaPutPixel!CHECKED(x2i, y2i, color, fracmul( fixfpart(x2f),  fixfpart(y2f)));
+	v.vline!CHECKED(x1i, y1i+1, y2i, color, fixfpart(x1f).flipBits);
+	v.vline!CHECKED(x2i, y1i+1, y2i, color, fixfpart(x2f)         );
+	v.hline!CHECKED(x1i+1, x2i, y1i, color, fixfpart(y1f).flipBits);
+	v.hline!CHECKED(x1i+1, x2i, y2i, color, fixfpart(y2f)         );
+	v.aaPutPixel!CHECKED(x1i, y1i, color, fracmul(fixfpart(x1f).flipBits, fixfpart(y1f).flipBits));
+	v.aaPutPixel!CHECKED(x1i, y2i, color, fracmul(fixfpart(x1f).flipBits, fixfpart(y2f)         ));
+	v.aaPutPixel!CHECKED(x2i, y1i, color, fracmul(fixfpart(x2f)         , fixfpart(y1f).flipBits));
+	v.aaPutPixel!CHECKED(x2i, y2i, color, fracmul(fixfpart(x2f)         , fixfpart(y2f)         ));
 
 	v.fillRect!CHECKED(x1i+1, y1i+1, x2i, y2i, color);
 }
@@ -653,6 +669,8 @@ void aaFillRect(bool CHECKED=true, F:float, V, COLOR)(auto ref V v, F x1, F y1, 
 void aaLine(bool CHECKED=true, V, COLOR)(auto ref V v, float x1, float y1, float x2, float y2, COLOR color)
 	if (isWritableView!V && is(COLOR : ViewColor!V))
 {
+	import std.math : abs;
+
 	// Simplistic straight-forward implementation. TODO: optimize
 	if (abs(x1-x2) > abs(y1-y2))
 		for (auto x=x1; sign(x1-x2)!=sign(x2-x); x += sign(x2-x1))
@@ -665,6 +683,8 @@ void aaLine(bool CHECKED=true, V, COLOR)(auto ref V v, float x1, float y1, float
 void aaLine(bool CHECKED=true, V, COLOR, frac)(auto ref V v, float x1, float y1, float x2, float y2, COLOR color, frac alpha)
 	if (isWritableView!V && is(COLOR : ViewColor!V))
 {
+	import std.math : abs;
+
 	// ditto
 	if (abs(x1-x2) > abs(y1-y2))
 		for (auto x=x1; sign(x1-x2)!=sign(x2-x); x += sign(x2-x1))
