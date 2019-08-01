@@ -236,7 +236,7 @@ template downscale(int HRX, int HRY=HRX)
 					static assert(0);
 				static if (is(typeof(COLOR.init.a))) // downscale with alpha
 				{
-					version (none) // TODO: broken
+					//version (none) // TODO: broken
 					{
 						ExpandChannelType!(COLOR, EXPAND_BYTES+COLOR.init.a.sizeof) sum;
 						ExpandChannelType!(typeof(COLOR.init.a), EXPAND_BYTES) alphaSum;
@@ -267,8 +267,8 @@ template downscale(int HRX, int HRY=HRX)
 							lr[x, y] = COLOR.init;
 						}
 					}
-					else
-						static assert(false, "Downscaling with alpha is not implemented");
+					// else
+					// 	static assert(false, "Downscaling with alpha is not implemented");
 				}
 				else
 				{
